@@ -19,8 +19,8 @@ jobs:
 
     - name: Clone MBZUAI-IFM llama.cpp fork (K2Horizon branch)
       run: |
-        # Clone the custom model repository containing MoVA architecture support
-        git clone --depth 1 --branch model/K2Horizon https://github.com llama_src
+        # Explicitly quote the URL to prevent any truncation during parsing
+        git clone --depth 1 --branch model/K2Horizon "https://github.com" llama_src
 
     - name: Install dependencies (Vulkan SDK & CMake)
       run: |
@@ -77,7 +77,7 @@ jobs:
         zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip ./*
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4 # Fixed from incorrect actions/artifacts
+      uses: actions/upload-artifact@v4
       with:
         name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan
         path: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip

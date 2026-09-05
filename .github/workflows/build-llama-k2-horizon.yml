@@ -1,4 +1,4 @@
-name: Build llama.cpp for macOS x64 with Vulkan (dynamic, minimal)
+name: Build llama.cpp for macOS x64 with Vulkan (dynamic)
 
 on:
   workflow_dispatch:
@@ -39,11 +39,7 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_VULKAN=ON \
-            -DGGML_METAL=OFF \
-            -DVulkan_INCLUDE_DIR=/usr/local/include \
-            -DVulkan_LIBRARY=/usr/local/lib/libvulkan.dylib \
-            -DMoltenVK_INCLUDE_DIR=/usr/local/include \
-            -DMoltenVK_LIBRARY=/usr/local/lib/libMoltenVK.dylib
+            -DGGML_METAL=OFF
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
       - name: Package artifacts with RPATH fix
@@ -52,13 +48,11 @@ jobs:
           mkdir -p package
           # Копируем все файлы из build/bin (исполняемые и .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Копируем libMoltenVK.dylib на всякий случай (уже есть в bin)
-          cp /usr/local/lib/libMoltenVK.dylib package/ || true
-          # Для каждого исполняемого файла меняем rpath на @executable_path
+          # Для каждого исполняемого файла меняем rpath на @executable_path для libMoltenVK.dylib
           for exe in package/llama-* package/test-*; do
             if [[ -f "$exe" && -x "$exe" ]]; then
               install_name_tool -change @rpath/libMoltenVK.dylib @executable_path/libMoltenVK.dylib "$exe" 2>/dev/null || true
-              # При необходимости добавляем другие .dylib
+              # При необходимости можно добавить другие библиотеки
               # install_name_tool -change @rpath/libggml-vulkan.dylib @executable_path/libggml-vulkan.dylib "$exe" 2>/dev/null || true
             fi
           done

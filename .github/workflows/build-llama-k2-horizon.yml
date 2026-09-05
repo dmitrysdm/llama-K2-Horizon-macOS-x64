@@ -2,6 +2,9 @@ name: Build llama.cpp for macOS x64 with Vulkan (K2-Horizon Support)
 
 on:
   workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+  push:
+    branches:
+      - main # Triggers compilation on every push to the main branch
 
 env:
   LLAMACPP_TAG: "K2Horizon-dev" # Set tag for the artifact filename structure
@@ -74,7 +77,7 @@ jobs:
         zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip ./*
 
     - name: Upload Artifact
-      uses: actions/artifacts/upload-artifact@v4
+      uses: actions/upload-artifact@v4 # Fixed from incorrect actions/artifacts
       with:
         name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan
         path: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip

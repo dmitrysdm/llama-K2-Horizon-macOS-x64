@@ -1,4 +1,4 @@
-name: Build llama.cpp for macOS x64 with Vulkan
+name: Build llama.cpp for macOS x64 with Vulkan (static)
 
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Vulkan support
+      - name: Build llama.cpp with Vulkan support (static)
         run: |
           cd llama.cpp
           mkdir -p build && cd build
@@ -40,7 +40,7 @@ jobs:
             -DGGML_VULKAN=ON \
             -DGGML_METAL=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DLLAMA_ACCELERATE=ON
+            -DBUILD_SHARED_LIBS=OFF
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
       - name: Package artifacts

@@ -23,7 +23,7 @@ jobs:
         run: |
           brew update
           brew install cmake
-          brew install vulkan-headers molten-vk shaderc
+          brew install vulkan-headers molten-vk shaderc spirv-headers
 
       - name: Get llama.cpp tag
         id: get_tag
@@ -58,7 +58,7 @@ jobs:
           for exe in package/llama-* package/test-*; do
             if [[ -f "$exe" && -x "$exe" ]]; then
               install_name_tool -change @rpath/libMoltenVK.dylib @executable_path/libMoltenVK.dylib "$exe" 2>/dev/null || true
-              # Также можно поправить другие зависимости, например libggml-vulkan.dylib, если нужно
+              # При необходимости добавляем другие .dylib
               # install_name_tool -change @rpath/libggml-vulkan.dylib @executable_path/libggml-vulkan.dylib "$exe" 2>/dev/null || true
             fi
           done

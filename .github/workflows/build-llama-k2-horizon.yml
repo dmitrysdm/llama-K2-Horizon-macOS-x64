@@ -32,57 +32,58 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Vulkan support
+      - name: Build llama.cpp with Vulkan support (disable OpenSSL/Curl)
         run: |
           cd llama.cpp
           mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_VULKAN=ON \
-            -DGGML_METAL=OFF
+            -DGGML_METAL=OFF \
+            -DLLAMA_CURL=OFF
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
       - name: Package artifacts with full RPATH fix
         run: |
           cd llama.cpp/build
           mkdir -p package
-          # Копируем все файлы из bin (исполняемые и .dylib)
+          # Copy all files from bin (executables and .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Копируем libMoltenVK.dylib (если его нет в bin)
+          # Copy libMoltenVK.dylib just in case it's not in bin
           cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
           cd package
 
-          # Функция для исправления зависимостей в файле
+          # Function to fix dependencies in a file (replace @rpath and absolute paths with @executable_path)
           fix_deps() {
             local file="$1"
             if [[ ! -f "$file" ]]; then return; fi
-            # Находим все зависимости с @rpath
-            local deps=$(otool -L "$file" 2>/dev/null | grep '@rpath' | awk '{print $1}')
+            # Find all dependencies that are not system paths (e.g., not starting with /usr/lib or /System)
+            local deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar)' | awk '{print $1}')
             for dep in $deps; do
               local libname=$(basename "$dep")
-              # Заменяем @rpath/... на @executable_path/...
+              # Change dependency to @executable_path/libname
               install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
             done
           }
 
-          # Исправляем все исполняемые файлы
+          # Fix all executables
           for exe in llama-* test-*; do
             if [[ -f "$exe" && -x "$exe" ]]; then
               fix_deps "$exe"
             fi
           done
 
-          # Исправляем все .dylib (меняем ID и зависимости)
+          # Fix all .dylib files (change ID and dependencies)
           for lib in *.dylib; do
             if [[ -f "$lib" ]]; then
-              # Меняем ID библиотеки на @executable_path/имя
+              # Change library ID to @executable_path/libname
               install_name_tool -id "@executable_path/$lib" "$lib" 2>/dev/null || true
-              # Исправляем внутренние зависимости
+              # Fix internal dependencies
               fix_deps "$lib"
             fi
           done
 
-          # Упаковываем
+          # Zip the package
           zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip .
           cd ..
 

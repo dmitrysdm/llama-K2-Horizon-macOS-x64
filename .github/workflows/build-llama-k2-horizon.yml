@@ -50,17 +50,13 @@ jobs:
         run: |
           cd llama.cpp/build
           mkdir -p package
-          # Copy all files from bin (executables and .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Also copy libMoltenVK.dylib if not present
           cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
 
-          # Function to collect all non-system dependencies from a file
           collect_deps() {
             local file="$1"
             if [[ ! -f "$file" ]]; then return; fi
             otool -L "$file" 2>/dev/null | grep -E '/usr/local/opt|/usr/local/Cellar|/usr/local/lib' | awk '{print $1}' | while read dep; do
-              # Resolve symlink to actual file
               if [[ -L "$dep" ]]; then
                 dep=$(readlink -f "$dep")
               fi
@@ -68,14 +64,12 @@ jobs:
             done
           }
 
-          # Collect dependencies from all files currently in package
           DEPS_FILE=$(mktemp)
           for f in package/*; do
             if [[ -f "$f" ]]; then
               collect_deps "$f" >> "$DEPS_FILE"
             fi
           done
-          # Copy each unique dependency to package
           sort -u "$DEPS_FILE" | while read dep; do
             if [[ -f "$dep" ]]; then
               cp -L "$dep" package/ 2>/dev/null || true
@@ -85,23 +79,19 @@ jobs:
 
           cd package
 
-          # Fix all files: replace absolute paths and @rpath with @executable_path
           for file in *; do
             if [[ -f "$file" ]]; then
-              # Find dependencies that start with @rpath, /usr/local/opt, /usr/local/Cellar, /usr/local/lib
-              local deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar|/usr/local/lib)' | awk '{print $1}')
+              deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar|/usr/local/lib)' | awk '{print $1}')
               for dep in $deps; do
-                local libname=$(basename "$dep")
+                libname=$(basename "$dep")
                 install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
               done
-              # If it's a .dylib, set its ID to @executable_path/name
               if [[ "$file" == *.dylib ]]; then
                 install_name_tool -id "@executable_path/$file" "$file" 2>/dev/null || true
               fi
             fi
           done
 
-          # Zip the package
           zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip .
           cd ..
 

@@ -32,7 +32,7 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Vulkan support (disable OpenSSL/Curl)
+      - name: Build llama.cpp with Vulkan support (disable OpenSSL)
         run: |
           cd llama.cpp
           mkdir -p build && cd build
@@ -40,28 +40,30 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_VULKAN=ON \
             -DGGML_METAL=OFF \
-            -DLLAMA_CURL=OFF
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_USE_OPENSSL=OFF
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts with full RPATH fix
+      - name: Package artifacts with full RPATH fix and optional OpenSSL libs
         run: |
           cd llama.cpp/build
           mkdir -p package
           # Copy all files from bin (executables and .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Copy libMoltenVK.dylib just in case it's not in bin
+          # Copy MoltenVK (needed for Vulkan)
           cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
+          # Copy OpenSSL libraries in case they are still needed
+          cp /usr/local/opt/openssl@3/lib/libssl.3.dylib package/ 2>/dev/null || true
+          cp /usr/local/opt/openssl@3/lib/libcrypto.3.dylib package/ 2>/dev/null || true
           cd package
 
-          # Function to fix dependencies in a file (replace @rpath and absolute paths with @executable_path)
+          # Function to replace absolute/rpath dependencies with @executable_path
           fix_deps() {
             local file="$1"
             if [[ ! -f "$file" ]]; then return; fi
-            # Find all dependencies that are not system paths (e.g., not starting with /usr/lib or /System)
             local deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar)' | awk '{print $1}')
             for dep in $deps; do
               local libname=$(basename "$dep")
-              # Change dependency to @executable_path/libname
               install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
             done
           }
@@ -73,12 +75,10 @@ jobs:
             fi
           done
 
-          # Fix all .dylib files (change ID and dependencies)
+          # Fix all .dylib files (ID and dependencies)
           for lib in *.dylib; do
             if [[ -f "$lib" ]]; then
-              # Change library ID to @executable_path/libname
               install_name_tool -id "@executable_path/$lib" "$lib" 2>/dev/null || true
-              # Fix internal dependencies
               fix_deps "$lib"
             fi
           done

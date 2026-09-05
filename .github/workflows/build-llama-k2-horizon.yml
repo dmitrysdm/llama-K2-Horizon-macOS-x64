@@ -23,7 +23,7 @@ jobs:
         run: |
           brew update
           brew install cmake
-          brew install vulkan-headers vulkan-loader molten-vk shaderc
+          brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers
 
       - name: Get llama.cpp tag
         id: get_tag

@@ -42,20 +42,47 @@ jobs:
             -DGGML_METAL=OFF
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts with RPATH fix
+      - name: Package artifacts with full RPATH fix
         run: |
           cd llama.cpp/build
           mkdir -p package
-          # Копируем все файлы из build/bin (исполняемые и .dylib)
+          # Копируем все файлы из bin (исполняемые и .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Для каждого исполняемого файла меняем rpath для libMoltenVK.dylib
-          for exe in package/llama-* package/test-*; do
+          # Копируем libMoltenVK.dylib (если его нет в bin)
+          cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
+          cd package
+
+          # Функция для исправления зависимостей в файле
+          fix_deps() {
+            local file="$1"
+            if [[ ! -f "$file" ]]; then return; fi
+            # Находим все зависимости с @rpath
+            local deps=$(otool -L "$file" 2>/dev/null | grep '@rpath' | awk '{print $1}')
+            for dep in $deps; do
+              local libname=$(basename "$dep")
+              # Заменяем @rpath/... на @executable_path/...
+              install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
+            done
+          }
+
+          # Исправляем все исполняемые файлы
+          for exe in llama-* test-*; do
             if [[ -f "$exe" && -x "$exe" ]]; then
-              install_name_tool -change @rpath/libMoltenVK.dylib @executable_path/libMoltenVK.dylib "$exe" 2>/dev/null || true
-              # Можно добавить и другие библиотеки, если потребуется
+              fix_deps "$exe"
             fi
           done
-          cd package
+
+          # Исправляем все .dylib (меняем ID и зависимости)
+          for lib in *.dylib; do
+            if [[ -f "$lib" ]]; then
+              # Меняем ID библиотеки на @executable_path/имя
+              install_name_tool -id "@executable_path/$lib" "$lib" 2>/dev/null || true
+              # Исправляем внутренние зависимости
+              fix_deps "$lib"
+            fi
+          done
+
+          # Упаковываем
           zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip .
           cd ..
 

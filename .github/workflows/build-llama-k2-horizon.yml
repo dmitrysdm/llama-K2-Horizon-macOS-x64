@@ -24,7 +24,6 @@ jobs:
           brew update
           brew install cmake
           brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers
-          # openssl@3 is not needed because we disable it via CMake flags
 
       - name: Get llama.cpp tag
         id: get_tag
@@ -47,35 +46,55 @@ jobs:
             -DVulkan_INCLUDE_DIR=/usr/local/include
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts with all dependencies (including OpenSSL if present)
+      - name: Package artifacts with full dependency collection and RPATH fix
         run: |
           cd llama.cpp/build
           mkdir -p package
-          # Copy all files from bin
+          # Copy all files from bin (executables and .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Copy libMoltenVK.dylib (if not already in bin)
+          # Also copy libMoltenVK.dylib if not present
           cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
-          # Copy OpenSSL libraries if they exist (just in case)
-          if [[ -f /usr/local/opt/openssl@3/lib/libssl.3.dylib ]]; then
-            cp /usr/local/opt/openssl@3/lib/libssl.3.dylib package/ 2>/dev/null || true
-            cp /usr/local/opt/openssl@3/lib/libcrypto.3.dylib package/ 2>/dev/null || true
-          fi
+
+          # Function to collect all non-system dependencies from a file
+          collect_deps() {
+            local file="$1"
+            if [[ ! -f "$file" ]]; then return; fi
+            otool -L "$file" 2>/dev/null | grep -E '/usr/local/opt|/usr/local/Cellar|/usr/local/lib' | awk '{print $1}' | while read dep; do
+              # Resolve symlink to actual file
+              if [[ -L "$dep" ]]; then
+                dep=$(readlink -f "$dep")
+              fi
+              echo "$dep"
+            done
+          }
+
+          # Collect dependencies from all files currently in package
+          DEPS_FILE=$(mktemp)
+          for f in package/*; do
+            if [[ -f "$f" ]]; then
+              collect_deps "$f" >> "$DEPS_FILE"
+            fi
+          done
+          # Copy each unique dependency to package
+          sort -u "$DEPS_FILE" | while read dep; do
+            if [[ -f "$dep" ]]; then
+              cp -L "$dep" package/ 2>/dev/null || true
+            fi
+          done
+          rm -f "$DEPS_FILE"
+
           cd package
 
-          # Fix libggml-vulkan.dylib to use local libMoltenVK.dylib
-          if [[ -f "libggml-vulkan.dylib" ]]; then
-            install_name_tool -change /usr/local/lib/libMoltenVK.dylib @executable_path/libMoltenVK.dylib libggml-vulkan.dylib 2>/dev/null || true
-          fi
-
-          # Fix all executables and libraries: replace absolute paths with @executable_path
+          # Fix all files: replace absolute paths and @rpath with @executable_path
           for file in *; do
             if [[ -f "$file" ]]; then
-              # For executables and .dylib
-              otool -L "$file" 2>/dev/null | grep -E '@rpath|/usr/local/opt|/usr/local/lib' | awk '{print $1}' | while read dep; do
-                libname=$(basename "$dep")
+              # Find dependencies that start with @rpath, /usr/local/opt, /usr/local/Cellar, /usr/local/lib
+              local deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar|/usr/local/lib)' | awk '{print $1}')
+              for dep in $deps; do
+                local libname=$(basename "$dep")
                 install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
               done
-              # For .dylib files, also set ID
+              # If it's a .dylib, set its ID to @executable_path/name
               if [[ "$file" == *.dylib ]]; then
                 install_name_tool -id "@executable_path/$file" "$file" 2>/dev/null || true
               fi

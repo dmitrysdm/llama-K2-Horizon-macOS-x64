@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15-intel
+    runs-on: macos-15-intel   # или macos-15, если Intel доступен
 
     steps:
       - name: Checkout repository
@@ -23,7 +23,7 @@ jobs:
         run: |
           brew update
           brew install cmake
-          brew install vulkan-headers vulkan-loader molten-vk
+          brew install vulkan-headers vulkan-loader molten-vk shaderc
 
       - name: Get llama.cpp tag
         id: get_tag

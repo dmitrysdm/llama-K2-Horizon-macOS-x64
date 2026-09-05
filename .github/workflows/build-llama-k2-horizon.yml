@@ -1,0 +1,383 @@
+name: Build llama.cpp K2-Horizon for macOS x64 Vulkan
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 3 * * 0"
+
+permissions:
+  contents: write
+
+env:
+  # K2-Horizon-compatible llama.cpp fork/branch
+  LLAMACPP_REPOSITORY: MBZUAI-IFM/llama.cpp
+  LLAMACPP_REF: model/K2Horizon
+
+  # This tag is used in the artifact name.
+  LLAMACPP_TAG: k2-horizon
+
+  # Current LunarG Vulkan SDK for macOS.
+  VULKAN_SDK_VERSION: 1.4.357.1
+
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    name: Build llama.cpp K2-Horizon - macOS x64 Vulkan
+    runs-on: macos-15-intel
+
+    steps:
+      # ------------------------------------------------------------
+      # Checkout K2-Horizon compatible llama.cpp
+      # ------------------------------------------------------------
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LLAMACPP_REPOSITORY }}
+          ref: ${{ env.LLAMACPP_REF }}
+          fetch-depth: 1
+          path: llama.cpp
+
+      # ------------------------------------------------------------
+      # Show build environment
+      # ------------------------------------------------------------
+      - name: Show environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sw_vers
+          uname -a
+          uname -m
+
+          clang --version
+          cmake --version
+          git --version
+
+      # ------------------------------------------------------------
+      # Install Vulkan SDK
+      # ------------------------------------------------------------
+      - name: Install Vulkan SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          SDK_VERSION="${VULKAN_SDK_VERSION}"
+
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-delay 5 \
+            -o vulkan-sdk.zip \
+            "https://sdk.lunarg.com/sdk/download/${SDK_VERSION}/mac/vulkan_sdk.zip"
+
+          unzip -q vulkan-sdk.zip
+
+          SDK_DIR="${RUNNER_TEMP}/VulkanSDK/${SDK_VERSION}"
+
+          # The official installer is contained inside the archive.
+          INSTALLER_APP=$(find . -maxdepth 3 \
+            -type d \
+            -name 'vulkansdk-macOS-*.app' \
+            -o \
+            -name 'InstallVulkan-*.app' \
+            | head -n 1)
+
+          if [ -z "${INSTALLER_APP}" ]; then
+            echo "ERROR: Vulkan SDK installer application was not found."
+            find . -maxdepth 4 -type d -print
+            exit 1
+          fi
+
+          echo "Vulkan installer: ${INSTALLER_APP}"
+
+          INSTALLER_BIN=$(find "${INSTALLER_APP}/Contents/MacOS" \
+            -type f \
+            -maxdepth 1 \
+            | head -n 1)
+
+          if [ -z "${INSTALLER_BIN}" ]; then
+            echo "ERROR: Vulkan installer executable was not found."
+            exit 1
+          fi
+
+          chmod +x "${INSTALLER_BIN}"
+
+          mkdir -p "${RUNNER_TEMP}/VulkanSDK"
+
+          sudo "${INSTALLER_BIN}" \
+            --root "${SDK_DIR}" \
+            --accept-licenses \
+            --default-answer \
+            --confirm-command install \
+            copy_only=1
+
+          echo "VULKAN_SDK=${SDK_DIR}" >> "${GITHUB_ENV}"
+          echo "${SDK_DIR}/bin" >> "${GITHUB_PATH}"
+
+          echo "VULKAN_SDK=${SDK_DIR}"
+
+      # ------------------------------------------------------------
+      # Configure Vulkan environment
+      # ------------------------------------------------------------
+      - name: Configure Vulkan environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if [ ! -d "${VULKAN_SDK}" ]; then
+            echo "ERROR: VULKAN_SDK does not exist:"
+            echo "${VULKAN_SDK}"
+            exit 1
+          fi
+
+          export PATH="${VULKAN_SDK}/bin:${PATH}"
+
+          echo "VULKAN_SDK=${VULKAN_SDK}"
+          echo "PATH=${PATH}"
+
+          if command -v glslc >/dev/null 2>&1; then
+            glslc --version
+          else
+            echo "ERROR: glslc was not found."
+            exit 1
+          fi
+
+          if command -v vulkaninfo >/dev/null 2>&1; then
+            vulkaninfo --summary || true
+          else
+            echo "vulkaninfo not found; continuing."
+          fi
+
+      # ------------------------------------------------------------
+      # Configure CMake
+      # ------------------------------------------------------------
+      - name: Configure llama.cpp
+        shell: bash
+        working-directory: llama.cpp
+        run: |
+          set -euxo pipefail
+
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_VULKAN=ON \
+            -DGGML_METAL=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
+            -DGGML_F16C=ON \
+            -DGGML_BMI2=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_SERVER=ON
+
+      # ------------------------------------------------------------
+      # Build
+      # ------------------------------------------------------------
+      - name: Build llama.cpp
+        shell: bash
+        working-directory: llama.cpp
+        run: |
+          set -euxo pipefail
+
+          cmake \
+            --build build \
+            --config "${BUILD_TYPE}" \
+            --parallel "$(sysctl -n hw.ncpu)"
+
+      # ------------------------------------------------------------
+      # Verify binaries
+      # ------------------------------------------------------------
+      - name: Verify build
+        shell: bash
+        working-directory: llama.cpp
+        run: |
+          set -euxo pipefail
+
+          echo "=== Build directory ==="
+          find build -maxdepth 3 -type f \
+            \( -name 'llama-*' -o -name 'llama' \) \
+            -print | sort
+
+          echo
+          echo "=== llama-cli ==="
+
+          LLAMA_CLI=$(find build \
+            -type f \
+            -name 'llama-cli' \
+            -perm -111 \
+            | head -n 1)
+
+          if [ -z "${LLAMA_CLI}" ]; then
+            echo "ERROR: llama-cli was not built."
+            exit 1
+          fi
+
+          echo "llama-cli: ${LLAMA_CLI}"
+
+          file "${LLAMA_CLI}"
+          "${LLAMA_CLI}" --version || true
+          "${LLAMA_CLI}" --help >/dev/null
+
+          echo
+          echo "=== llama-server ==="
+
+          LLAMA_SERVER=$(find build \
+            -type f \
+            -name 'llama-server' \
+            -perm -111 \
+            | head -n 1)
+
+          if [ -z "${LLAMA_SERVER}" ]; then
+            echo "ERROR: llama-server was not built."
+            exit 1
+          fi
+
+          echo "llama-server: ${LLAMA_SERVER}"
+
+          file "${LLAMA_SERVER}"
+          "${LLAMA_SERVER}" --version || true
+          "${LLAMA_SERVER}" --help >/dev/null
+
+          echo
+          echo "=== Vulkan linkage ==="
+
+          otool -L "${LLAMA_CLI}" || true
+
+          echo
+          echo "=== K2 Horizon symbols/strings ==="
+
+          strings "${LLAMA_CLI}" | grep -i \
+            -E 'K2|Horizon' \
+            | head -n 30 || true
+
+      # ------------------------------------------------------------
+      # Prepare portable distribution
+      # ------------------------------------------------------------
+      - name: Prepare distribution
+        shell: bash
+        working-directory: llama.cpp
+        run: |
+          set -euxo pipefail
+
+          DIST="${GITHUB_WORKSPACE}/dist"
+          rm -rf "${DIST}"
+
+          mkdir -p "${DIST}/bin"
+          mkdir -p "${DIST}/lib"
+          mkdir -p "${DIST}/docs"
+
+          # Copy executables.
+          find build \
+            -type f \
+            -perm -111 \
+            \( \
+              -name 'llama-cli' \
+              -o -name 'llama-server' \
+              -o -name 'llama-bench' \
+              -o -name 'llama-perplexity' \
+              -o -name 'llama-quantize' \
+              -o -name 'llama-gguf' \
+              -o -name 'llama-tokenize' \
+            \) \
+            -exec cp {} "${DIST}/bin/" \;
+
+          # Copy useful documentation.
+          cp LICENSE "${DIST}/docs/" 2>/dev/null || true
+          cp README.md "${DIST}/docs/" 2>/dev/null || true
+
+          # Record build information.
+          {
+            echo "llama.cpp K2-Horizon macOS x64 Vulkan"
+            echo
+            echo "llama.cpp repository: ${LLAMACPP_REPOSITORY}"
+            echo "llama.cpp ref:        ${LLAMACPP_REF}"
+            echo "artifact tag:         ${LLAMACPP_TAG}"
+            echo "Vulkan SDK:           ${VULKAN_SDK_VERSION}"
+            echo
+            echo "Target architecture:  x86_64"
+            echo "GPU backend:          Vulkan"
+            echo "Metal backend:        disabled"
+            echo "CPU native tuning:    disabled"
+            echo
+            git -C "${GITHUB_WORKSPACE}/llama.cpp" rev-parse HEAD
+          } > "${DIST}/BUILD_INFO.txt"
+
+          chmod +x "${DIST}/bin/"*
+
+          echo "=== Distribution ==="
+          find "${DIST}" -maxdepth 3 -type f -print | sort
+
+      # ------------------------------------------------------------
+      # Create ZIP
+      # ------------------------------------------------------------
+      - name: Create artifact
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          ARTIFACT="llama-${LLAMACPP_TAG}-bin-macos-x64-vulkan.zip"
+
+          cd dist
+
+          zip -r \
+            -9 \
+            "../${ARTIFACT}" \
+            .
+
+          cd ..
+
+          ls -lh "${ARTIFACT}"
+
+          echo "ARTIFACT=${ARTIFACT}" >> "${GITHUB_ENV}"
+
+      # ------------------------------------------------------------
+      # Upload artifact to GitHub Actions
+      # ------------------------------------------------------------
+      - name: Upload GitHub Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan
+          path: ${{ env.ARTIFACT }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # ------------------------------------------------------------
+      # Create/update GitHub Release
+      # ------------------------------------------------------------
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.LLAMACPP_TAG }}
+          name: llama.cpp ${{ env.LLAMACPP_TAG }} - macOS x64 Vulkan
+          body: |
+            llama.cpp K2-Horizon build for Intel macOS.
+
+            Backend:
+            - Vulkan
+            - Metal disabled
+
+            Architecture:
+            - x86_64
+
+            K2-Horizon source:
+            - ${{ env.LLAMACPP_REPOSITORY }}
+            - ${{ env.LLAMACPP_REF }}
+
+            Vulkan SDK:
+            - ${{ env.VULKAN_SDK_VERSION }}
+          files: |
+            ${{ env.ARTIFACT }}
+          prerelease: true
+          make_latest: false

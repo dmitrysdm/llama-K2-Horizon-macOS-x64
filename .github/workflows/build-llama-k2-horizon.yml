@@ -32,7 +32,7 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Vulkan support
+      - name: Build llama.cpp with Vulkan support (link directly to MoltenVK)
         run: |
           cd llama.cpp
           mkdir -p build && cd build
@@ -41,50 +41,46 @@ jobs:
             -DGGML_VULKAN=ON \
             -DGGML_METAL=OFF \
             -DLLAMA_CURL=OFF \
-            -DLLAMA_USE_OPENSSL=OFF
+            -DLLAMA_USE_OPENSSL=OFF \
+            -DVulkan_LIBRARY=/usr/local/lib/libMoltenVK.dylib \
+            -DVulkan_INCLUDE_DIR=/usr/local/include
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts with all necessary libraries
+      - name: Package artifacts
         run: |
           cd llama.cpp/build
           mkdir -p package
-          # Copy all files from bin (executables and .dylib)
+          # Copy all executables and libraries from bin
           cp -r bin/* package/ 2>/dev/null || true
-
-          # Explicitly copy Vulkan and MoltenVK libraries (including versioned files)
-          cp /usr/local/lib/libvulkan*.dylib package/ 2>/dev/null || true
-          cp /usr/local/lib/libMoltenVK*.dylib package/ 2>/dev/null || true
-
-          # Copy OpenSSL libraries (if they exist, though we disabled them)
-          cp /usr/local/opt/openssl@3/lib/libssl*.dylib package/ 2>/dev/null || true
-          cp /usr/local/opt/openssl@3/lib/libcrypto*.dylib package/ 2>/dev/null || true
-
+          # Copy libMoltenVK.dylib (if not already in bin)
+          cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
           cd package
 
-          # Fix all dependencies: replace absolute paths and @rpath with @executable_path
-          fix_deps() {
-            local file="$1"
-            if [[ ! -f "$file" ]]; then return; fi
-            # Find dependencies that are not system default (e.g., starting with @rpath, /usr/local/opt, /usr/local/Cellar, /usr/local/lib)
-            local deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar|/usr/local/lib)' | awk '{print $1}')
-            for dep in $deps; do
-              local libname=$(basename "$dep")
-              install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
-            done
-          }
+          # Fix libggml-vulkan.dylib to look for libMoltenVK.dylib in the same folder
+          if [[ -f "libggml-vulkan.dylib" ]]; then
+            install_name_tool -change /usr/local/lib/libMoltenVK.dylib @executable_path/libMoltenVK.dylib libggml-vulkan.dylib 2>/dev/null || true
+          fi
 
-          # Fix executables
+          # Fix all executables to use local libMoltenVK.dylib
           for exe in llama-* test-*; do
             if [[ -f "$exe" && -x "$exe" ]]; then
-              fix_deps "$exe"
+              install_name_tool -change /usr/local/lib/libMoltenVK.dylib @executable_path/libMoltenVK.dylib "$exe" 2>/dev/null || true
+              # Also fix any other @rpath dependencies if they exist
+              otool -L "$exe" 2>/dev/null | grep -E '@rpath|/usr/local' | awk '{print $1}' | while read dep; do
+                libname=$(basename "$dep")
+                install_name_tool -change "$dep" "@executable_path/$libname" "$exe" 2>/dev/null || true
+              done
             fi
           done
 
-          # Fix .dylib files (ID and dependencies)
+          # Fix any other .dylib files similarly (optional, but good)
           for lib in *.dylib; do
             if [[ -f "$lib" ]]; then
               install_name_tool -id "@executable_path/$lib" "$lib" 2>/dev/null || true
-              fix_deps "$lib"
+              otool -L "$lib" 2>/dev/null | grep -E '@rpath|/usr/local' | awk '{print $1}' | while read dep; do
+                libname=$(basename "$dep")
+                install_name_tool -change "$dep" "@executable_path/$libname" "$lib" 2>/dev/null || true
+              done
             fi
           done
 

@@ -32,7 +32,7 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Vulkan support (disable OpenSSL)
+      - name: Build llama.cpp with Vulkan support
         run: |
           cd llama.cpp
           mkdir -p build && cd build
@@ -44,26 +44,56 @@ jobs:
             -DLLAMA_USE_OPENSSL=OFF
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts with full RPATH fix and optional OpenSSL libs
+      - name: Package artifacts with all dependencies automatically
         run: |
           cd llama.cpp/build
           mkdir -p package
           # Copy all files from bin (executables and .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Copy MoltenVK (needed for Vulkan)
-          cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
-          # Copy OpenSSL libraries in case they are still needed
-          cp /usr/local/opt/openssl@3/lib/libssl.3.dylib package/ 2>/dev/null || true
-          cp /usr/local/opt/openssl@3/lib/libcrypto.3.dylib package/ 2>/dev/null || true
+
+          # Function to collect all non-system dependencies from otool output
+          collect_deps() {
+            local file="$1"
+            if [[ ! -f "$file" ]]; then return; fi
+            # Find all dependencies that are not system paths (not starting with /usr/lib, /System, /usr/local/lib (but we want to copy some))
+            # We will look for paths in /usr/local/opt, /usr/local/Cellar, and /usr/local/lib (but exclude system frameworks)
+            otool -L "$file" 2>/dev/null | grep -E '/usr/local/opt|/usr/local/Cellar|/usr/local/lib' | awk '{print $1}' | while read dep; do
+              # Resolve symlink to actual file
+              if [[ -L "$dep" ]]; then
+                dep=$(readlink -f "$dep")
+              fi
+              echo "$dep"
+            done
+          }
+
+          # Collect all dependencies from executables and existing .dylib in package
+          DEPS_FILE=$(mktemp)
+          for f in package/*; do
+            if [[ -f "$f" ]]; then
+              collect_deps "$f" >> "$DEPS_FILE"
+            fi
+          done
+          # Also check the original bin directory for libraries that might not be copied yet? But we already copied all from bin.
+
+          # Copy each unique dependency to package
+          sort -u "$DEPS_FILE" | while read dep; do
+            if [[ -f "$dep" ]]; then
+              cp -L "$dep" package/ 2>/dev/null || true
+            fi
+          done
+          rm -f "$DEPS_FILE"
+
           cd package
 
-          # Function to replace absolute/rpath dependencies with @executable_path
+          # Now fix all dependencies in all files (executables and libraries)
           fix_deps() {
             local file="$1"
             if [[ ! -f "$file" ]]; then return; fi
-            local deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar)' | awk '{print $1}')
+            # Find dependencies that start with @rpath or absolute paths in /usr/local
+            local deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar|/usr/local/lib)' | awk '{print $1}')
             for dep in $deps; do
               local libname=$(basename "$dep")
+              # Change dependency to @executable_path/libname
               install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
             done
           }
@@ -75,7 +105,7 @@ jobs:
             fi
           done
 
-          # Fix all .dylib files (ID and dependencies)
+          # Fix all .dylib files (change ID and dependencies)
           for lib in *.dylib; do
             if [[ -f "$lib" ]]; then
               install_name_tool -id "@executable_path/$lib" "$lib" 2>/dev/null || true

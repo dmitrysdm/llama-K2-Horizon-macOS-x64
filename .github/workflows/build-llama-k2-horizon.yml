@@ -23,7 +23,7 @@ jobs:
         run: |
           brew update
           brew install cmake
-          brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers
+          brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers openssl@3
 
       - name: Get llama.cpp tag
         id: get_tag
@@ -46,41 +46,36 @@ jobs:
             -DVulkan_INCLUDE_DIR=/usr/local/include
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts
+      - name: Package artifacts with all dependencies (including OpenSSL)
         run: |
           cd llama.cpp/build
           mkdir -p package
-          # Copy all executables and libraries from bin
+          # Copy all files from bin
           cp -r bin/* package/ 2>/dev/null || true
           # Copy libMoltenVK.dylib (if not already in bin)
           cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
+          # Copy OpenSSL libraries (explicitly)
+          cp /usr/local/opt/openssl@3/lib/libssl.3.dylib package/ 2>/dev/null || true
+          cp /usr/local/opt/openssl@3/lib/libcrypto.3.dylib package/ 2>/dev/null || true
           cd package
 
-          # Fix libggml-vulkan.dylib to look for libMoltenVK.dylib in the same folder
+          # Fix libggml-vulkan.dylib to use local libMoltenVK.dylib
           if [[ -f "libggml-vulkan.dylib" ]]; then
             install_name_tool -change /usr/local/lib/libMoltenVK.dylib @executable_path/libMoltenVK.dylib libggml-vulkan.dylib 2>/dev/null || true
           fi
 
-          # Fix all executables to use local libMoltenVK.dylib
-          for exe in llama-* test-*; do
-            if [[ -f "$exe" && -x "$exe" ]]; then
-              install_name_tool -change /usr/local/lib/libMoltenVK.dylib @executable_path/libMoltenVK.dylib "$exe" 2>/dev/null || true
-              # Also fix any other @rpath dependencies if they exist
-              otool -L "$exe" 2>/dev/null | grep -E '@rpath|/usr/local' | awk '{print $1}' | while read dep; do
+          # Fix all executables and libraries: replace absolute paths with @executable_path
+          for file in *; do
+            if [[ -f "$file" ]]; then
+              # For executables and .dylib
+              otool -L "$file" 2>/dev/null | grep -E '@rpath|/usr/local/opt|/usr/local/lib' | awk '{print $1}' | while read dep; do
                 libname=$(basename "$dep")
-                install_name_tool -change "$dep" "@executable_path/$libname" "$exe" 2>/dev/null || true
+                install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
               done
-            fi
-          done
-
-          # Fix any other .dylib files similarly (optional, but good)
-          for lib in *.dylib; do
-            if [[ -f "$lib" ]]; then
-              install_name_tool -id "@executable_path/$lib" "$lib" 2>/dev/null || true
-              otool -L "$lib" 2>/dev/null | grep -E '@rpath|/usr/local' | awk '{print $1}' | while read dep; do
-                libname=$(basename "$dep")
-                install_name_tool -change "$dep" "@executable_path/$libname" "$lib" 2>/dev/null || true
-              done
+              # For .dylib files, also set ID
+              if [[ "$file" == *.dylib ]]; then
+                install_name_tool -id "@executable_path/$file" "$file" 2>/dev/null || true
+              fi
             fi
           done
 

@@ -25,17 +25,27 @@ jobs:
         # Install build utilities and Vulkan SDK (MoltenVK) for macOS
         brew install cmake ninja vulkan-sdk
 
+    - name: Set Vulkan Environment Variables
+      run: |
+        # Locate Vulkan SDK installed by Homebrew and export paths for CMake
+        VULKAN_DIR=$(brew --prefix vulkan-sdk)
+        echo "VULKAN_SDK=$VULKAN_DIR" >> $GITHUB_ENV
+        echo "CMAKE_PREFIX_PATH=$VULKAN_DIR" >> $GITHUB_ENV
+        echo "$VULKAN_DIR/bin" >> $GITHUB_PATH
+
     - name: Configure and Build with Vulkan
       run: |
         cd llama_src
         mkdir build
         cd build
         
-        # Configure build: Enable Vulkan backend and explicitly disable Metal
+        # Configure build: Enable Vulkan backend, explicitly disable Metal, and ensure examples are built
         cmake -B . -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DGGML_VULKAN=ON \
           -DGGML_METAL=OFF \
+          -DLLAMA_BUILD_EXAMPLES=ON \
+          -DCMAKE_PREFIX_PATH="${{ env.CMAKE_PREFIX_PATH }}" \
           ..
           
         # Run compilation

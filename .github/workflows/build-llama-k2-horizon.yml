@@ -1,4 +1,4 @@
-name: Build llama.cpp for macOS x64 with Metal (static)
+name: Build llama.cpp for macOS x64 with Metal (fully static, no OpenSSL)
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Metal support (static)
+      - name: Build llama.cpp with Metal support (static, no SSL)
         run: |
           cd llama.cpp
           mkdir -p build && cd build
@@ -42,14 +42,15 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_VULKAN=OFF \
             -DLLAMA_CURL=OFF \
-            -DLLAMA_USE_OPENSSL=OFF
+            -DLLAMA_USE_OPENSSL=OFF \
+            -DOPENSSL_ROOT_DIR="" \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts
+      - name: Package artifacts (only executables, no libraries)
         run: |
           cd llama.cpp/build
           mkdir -p package
-          # Copy all executables (excluding libraries, object files, etc.)
           find . -type f -perm +111 \
             -not -name "*.so" \
             -not -name "*.dylib" \

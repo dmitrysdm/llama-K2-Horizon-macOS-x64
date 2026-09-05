@@ -1,84 +1,64 @@
-name: Build llama.cpp for macOS x64 with Vulkan (K2-Horizon Support)
+name: Build llama.cpp for macOS x64 with Vulkan
 
 on:
-  workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+  workflow_dispatch:
   push:
-    branches:
-      - main # Triggers compilation on every push to the main branch
-
-env:
-  LLAMACPP_TAG: "K2Horizon-dev" # Set tag for the artifact filename structure
-  REPOSITORY_URL: "MBZUAI-IFM/llama.cpp"
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 
 jobs:
   build:
-    runs-on: macos-15-intel # Current runner for Intel-based (x64) macOS
-    
+    runs-on: macos-15-intel   # Intel‑based macOS 15 runner
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: dmitrysdm/llama-K2-Horizon-macOS-x64
+          path: llama-K2-Horizon-macOS-x64
 
-    - name: Clone MBZUAI-IFM llama.cpp fork (K2Horizon branch)
-      run: |
-        # Using environment variable to guarantee the URL string remains intact
-        git clone --depth 1 --branch model/K2Horizon "${{ env.REPOSITORY_URL }}" llama_src
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install cmake
+          brew install vulkan-headers vulkan-loader molten-vk
 
-    - name: Install dependencies (Vulkan SDK & CMake)
-      run: |
-        brew update
-        # Install build utilities and Vulkan SDK (MoltenVK) for macOS
-        brew install cmake ninja vulkan-sdk
+      - name: Get llama.cpp tag
+        id: get_tag
+        run: |
+          cd llama-K2-Horizon-macOS-x64
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
+          echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-    - name: Set Vulkan Environment Variables
-      run: |
-        # Locate Vulkan SDK installed by Homebrew and export paths for CMake
-        VULKAN_DIR=$(brew --prefix vulkan-sdk)
-        echo "VULKAN_SDK=$VULKAN_DIR" >> $GITHUB_ENV
-        echo "CMAKE_PREFIX_PATH=$VULKAN_DIR" >> $GITHUB_ENV
-        echo "$VULKAN_DIR/bin" >> $GITHUB_PATH
+      - name: Build llama.cpp with Vulkan support
+        run: |
+          cd llama-K2-Horizon-macOS-x64
+          mkdir -p build && cd build
+          cmake .. \
+            -DGGML_VULKAN=ON \
+            -DGGML_METAL=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLAMA_ACCELERATE=ON
+          cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-    - name: Configure and Build with Vulkan
-      run: |
-        cd llama_src
-        mkdir build
-        cd build
-        
-        # Configure build: Enable Vulkan backend, explicitly disable Metal, and ensure examples are built
-        cmake -B . -G Ninja \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DGGML_VULKAN=ON \
-          -DGGML_METAL=OFF \
-          -DLLAMA_BUILD_EXAMPLES=ON \
-          -DCMAKE_PREFIX_PATH="${{ env.CMAKE_PREFIX_PATH }}" \
-          ..
-          
-        # Run compilation
-        cmake --build . --config Release
+      - name: Package artifacts
+        run: |
+          cd llama-K2-Horizon-macOS-x64/build
+          mkdir -p package
+          # Копируем все исполняемые файлы (без библиотек и объектных)
+          find . -type f -perm +111 \
+            -not -name "*.so" \
+            -not -name "*.dylib" \
+            -not -name "*.a" \
+            -not -name "*.o" \
+            -exec cp {} package/ \;
+          cd package
+          zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip .
+          cd ..
 
-    - name: Prepare Artifacts
-      run: |
-        mkdir -p build_artifacts
-        
-        # Check and copy main binary handling both old and new llama.cpp naming styles
-        if [ -f "llama_src/build/bin/llama-cli" ]; then
-          cp llama_src/build/bin/llama-cli build_artifacts/
-        elif [ -f "llama_src/build/bin/llama-main" ]; then
-          cp llama_src/build/bin/llama-main build_artifacts/
-        else
-          cp llama_src/build/bin/llama build_artifacts/ 2>/dev/null || echo "Main binary not found"
-        fi
-        
-        # Copy the quantization binary
-        cp llama_src/build/bin/llama-quantize build_artifacts/ 2>/dev/null || cp llama_src/build/bin/quantize build_artifacts/ 2>/dev/null
-
-    - name: Archive Binaries
-      run: |
-        # Compress the binaries using the requested tag naming format
-        cd build_artifacts
-        zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip ./*
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan
-        path: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan
+          path: llama-K2-Horizon-macOS-x64/build/llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip

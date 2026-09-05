@@ -23,7 +23,8 @@ jobs:
         run: |
           brew update
           brew install cmake
-          brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers openssl@3
+          brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers
+          # openssl@3 is not needed because we disable it via CMake flags
 
       - name: Get llama.cpp tag
         id: get_tag
@@ -46,7 +47,7 @@ jobs:
             -DVulkan_INCLUDE_DIR=/usr/local/include
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts with all dependencies (including OpenSSL)
+      - name: Package artifacts with all dependencies (including OpenSSL if present)
         run: |
           cd llama.cpp/build
           mkdir -p package
@@ -54,9 +55,11 @@ jobs:
           cp -r bin/* package/ 2>/dev/null || true
           # Copy libMoltenVK.dylib (if not already in bin)
           cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
-          # Copy OpenSSL libraries (explicitly)
-          cp /usr/local/opt/openssl@3/lib/libssl.3.dylib package/ 2>/dev/null || true
-          cp /usr/local/opt/openssl@3/lib/libcrypto.3.dylib package/ 2>/dev/null || true
+          # Copy OpenSSL libraries if they exist (just in case)
+          if [[ -f /usr/local/opt/openssl@3/lib/libssl.3.dylib ]]; then
+            cp /usr/local/opt/openssl@3/lib/libssl.3.dylib package/ 2>/dev/null || true
+            cp /usr/local/opt/openssl@3/lib/libcrypto.3.dylib package/ 2>/dev/null || true
+          fi
           cd package
 
           # Fix libggml-vulkan.dylib to use local libMoltenVK.dylib

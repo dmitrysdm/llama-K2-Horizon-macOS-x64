@@ -23,7 +23,7 @@ jobs:
         run: |
           brew update
           brew install cmake
-          brew install vulkan-headers molten-vk shaderc spirv-headers
+          brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers
 
       - name: Get llama.cpp tag
         id: get_tag
@@ -32,7 +32,7 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Vulkan support (dynamic)
+      - name: Build llama.cpp with Vulkan support
         run: |
           cd llama.cpp
           mkdir -p build && cd build
@@ -48,12 +48,11 @@ jobs:
           mkdir -p package
           # Копируем все файлы из build/bin (исполняемые и .dylib)
           cp -r bin/* package/ 2>/dev/null || true
-          # Для каждого исполняемого файла меняем rpath на @executable_path для libMoltenVK.dylib
+          # Для каждого исполняемого файла меняем rpath для libMoltenVK.dylib
           for exe in package/llama-* package/test-*; do
             if [[ -f "$exe" && -x "$exe" ]]; then
               install_name_tool -change @rpath/libMoltenVK.dylib @executable_path/libMoltenVK.dylib "$exe" 2>/dev/null || true
-              # При необходимости можно добавить другие библиотеки
-              # install_name_tool -change @rpath/libggml-vulkan.dylib @executable_path/libggml-vulkan.dylib "$exe" 2>/dev/null || true
+              # Можно добавить и другие библиотеки, если потребуется
             fi
           done
           cd package

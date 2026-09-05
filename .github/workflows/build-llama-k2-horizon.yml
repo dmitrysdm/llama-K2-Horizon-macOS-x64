@@ -8,6 +8,7 @@ on:
 
 env:
   LLAMACPP_TAG: "K2Horizon-dev" # Set tag for the artifact filename structure
+  REPOSITORY_URL: "MBZUAI-IFM/llama.cpp"
 
 jobs:
   build:
@@ -19,8 +20,8 @@ jobs:
 
     - name: Clone MBZUAI-IFM llama.cpp fork (K2Horizon branch)
       run: |
-        # Explicitly quote the URL to prevent any truncation during parsing
-        git clone --depth 1 --branch model/K2Horizon "https://github.com" llama_src
+        # Using environment variable to guarantee the URL string remains intact
+        git clone --depth 1 --branch model/K2Horizon "${{ env.REPOSITORY_URL }}" llama_src
 
     - name: Install dependencies (Vulkan SDK & CMake)
       run: |

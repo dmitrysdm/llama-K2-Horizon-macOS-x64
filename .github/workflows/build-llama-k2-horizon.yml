@@ -9,14 +9,15 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15-intel   # Intel‑based macOS 15 runner
+    runs-on: macos-15-intel
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          repository: dmitrysdm/llama-K2-Horizon-macOS-x64
-          path: llama-K2-Horizon-macOS-x64
+          repository: MBZUAI-IFM/llama.cpp
+          ref: model/K2Horizon
+          path: llama.cpp
 
       - name: Install dependencies
         run: |
@@ -27,13 +28,13 @@ jobs:
       - name: Get llama.cpp tag
         id: get_tag
         run: |
-          cd llama-K2-Horizon-macOS-x64
+          cd llama.cpp
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
       - name: Build llama.cpp with Vulkan support
         run: |
-          cd llama-K2-Horizon-macOS-x64
+          cd llama.cpp
           mkdir -p build && cd build
           cmake .. \
             -DGGML_VULKAN=ON \
@@ -44,9 +45,8 @@ jobs:
 
       - name: Package artifacts
         run: |
-          cd llama-K2-Horizon-macOS-x64/build
+          cd llama.cpp/build
           mkdir -p package
-          # Копируем все исполняемые файлы (без библиотек и объектных)
           find . -type f -perm +111 \
             -not -name "*.so" \
             -not -name "*.dylib" \
@@ -61,4 +61,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan
-          path: llama-K2-Horizon-macOS-x64/build/llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip
+          path: llama.cpp/build/llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip

@@ -1,4 +1,4 @@
-name: Build llama.cpp for macOS x64 with Vulkan (dynamic)
+name: Build llama.cpp for macOS x64 with Metal (static)
 
 on:
   workflow_dispatch:
@@ -23,7 +23,6 @@ jobs:
         run: |
           brew update
           brew install cmake
-          brew install vulkan-headers vulkan-loader molten-vk shaderc spirv-headers
 
       - name: Get llama.cpp tag
         id: get_tag
@@ -32,71 +31,37 @@ jobs:
           TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
           echo "LLAMACPP_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build llama.cpp with Vulkan support (link directly to MoltenVK)
+      - name: Build llama.cpp with Metal support (static)
         run: |
           cd llama.cpp
           mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_VULKAN=ON \
-            -DGGML_METAL=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_VULKAN=OFF \
             -DLLAMA_CURL=OFF \
-            -DLLAMA_USE_OPENSSL=OFF \
-            -DVulkan_LIBRARY=/usr/local/lib/libMoltenVK.dylib \
-            -DVulkan_INCLUDE_DIR=/usr/local/include
+            -DLLAMA_USE_OPENSSL=OFF
           cmake --build . --config Release -j $(sysctl -n hw.ncpu)
 
-      - name: Package artifacts with full dependency collection and RPATH fix
+      - name: Package artifacts
         run: |
           cd llama.cpp/build
           mkdir -p package
-          cp -r bin/* package/ 2>/dev/null || true
-          cp /usr/local/lib/libMoltenVK.dylib package/ 2>/dev/null || true
-
-          collect_deps() {
-            local file="$1"
-            if [[ ! -f "$file" ]]; then return; fi
-            otool -L "$file" 2>/dev/null | grep -E '/usr/local/opt|/usr/local/Cellar|/usr/local/lib' | awk '{print $1}' | while read dep; do
-              if [[ -L "$dep" ]]; then
-                dep=$(readlink -f "$dep")
-              fi
-              echo "$dep"
-            done
-          }
-
-          DEPS_FILE=$(mktemp)
-          for f in package/*; do
-            if [[ -f "$f" ]]; then
-              collect_deps "$f" >> "$DEPS_FILE"
-            fi
-          done
-          sort -u "$DEPS_FILE" | while read dep; do
-            if [[ -f "$dep" ]]; then
-              cp -L "$dep" package/ 2>/dev/null || true
-            fi
-          done
-          rm -f "$DEPS_FILE"
-
+          # Copy all executables (excluding libraries, object files, etc.)
+          find . -type f -perm +111 \
+            -not -name "*.so" \
+            -not -name "*.dylib" \
+            -not -name "*.a" \
+            -not -name "*.o" \
+            -exec cp {} package/ \;
           cd package
-
-          for file in *; do
-            if [[ -f "$file" ]]; then
-              deps=$(otool -L "$file" 2>/dev/null | grep -E '(@rpath|/usr/local/opt|/usr/local/Cellar|/usr/local/lib)' | awk '{print $1}')
-              for dep in $deps; do
-                libname=$(basename "$dep")
-                install_name_tool -change "$dep" "@executable_path/$libname" "$file" 2>/dev/null || true
-              done
-              if [[ "$file" == *.dylib ]]; then
-                install_name_tool -id "@executable_path/$file" "$file" 2>/dev/null || true
-              fi
-            fi
-          done
-
-          zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip .
+          zip -r ../llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-metal.zip .
           cd ..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan
-          path: llama.cpp/build/llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-vulkan.zip
+          name: llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-metal
+          path: llama.cpp/build/llama-${{ env.LLAMACPP_TAG }}-bin-macos-x64-metal.zip
